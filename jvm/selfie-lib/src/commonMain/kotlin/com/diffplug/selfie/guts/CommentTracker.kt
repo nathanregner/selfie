@@ -39,7 +39,8 @@ class CommentTracker {
       comment.writable
     } else {
       val newComment = commentAndLine(path, layout.fs).first
-      cache.updateAndGet { it.plus(path, newComment) }
+      // may race get(), ignore if already present
+      cache.updateAndGet { it.plusOrNoOp(path, newComment) }
       newComment.writable
     }
   }
