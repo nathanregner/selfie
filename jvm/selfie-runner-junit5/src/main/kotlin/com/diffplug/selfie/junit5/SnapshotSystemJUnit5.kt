@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2023-2024 DiffPlug
+ * Copyright (C) 2023-2025 DiffPlug
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -179,7 +179,7 @@ internal class SnapshotFileProgress(val system: SnapshotSystemJUnit5, val classN
 
   private var file: SnapshotFile? = null
   private val tests = atomic(ArrayMap.empty<String, WithinTestGC>())
-  private var diskWriteTracker: DiskWriteTracker? = DiskWriteTracker()
+  private var diskWriteTracker = atomic<DiskWriteTracker?>(DiskWriteTracker())
   private val timesStarted = AtomicInteger(0)
   private val hasFailed = AtomicBoolean(false)
 
@@ -209,7 +209,7 @@ internal class SnapshotFileProgress(val system: SnapshotSystemJUnit5, val classN
   }
   private fun finishedClassWithSuccess(success: Boolean) {
     assertNotTerminated()
-    diskWriteTracker = null // don't need this anymore
+    diskWriteTracker.updateAndGet { null } // don't need this anymore
     val tests = tests.getAndUpdate { TERMINATED }
     require(tests !== TERMINATED) { "Snapshot $className already terminated!" }
     if (file != null) {
@@ -260,7 +260,7 @@ internal class SnapshotFileProgress(val system: SnapshotSystemJUnit5, val classN
   ) {
     assertNotTerminated()
     val key = "$test$suffix"
-    diskWriteTracker!!.record(key, snapshot, callStack, layout)
+    diskWriteTracker.get()!!.record(key, snapshot, callStack, layout)
     tests.get()[test]!!.keepSuffix(suffix)
     read().setAtTestTime(key, snapshot)
   }
@@ -273,7 +273,11 @@ internal class SnapshotFileProgress(val system: SnapshotSystemJUnit5, val classN
     return snapshot
   }
   private fun read(): SnapshotFile {
-    if (file == null) {
+    var file = this.file
+    if (file != null) return file
+    synchronized(this) {
+      file = this.file
+      if (file != null) return file
       val snapshotPath = system.layout.snapshotPathForClass(className).toPath()
       file =
           if (Files.exists(snapshotPath) && Files.isRegularFile(snapshotPath)) {
@@ -282,8 +286,9 @@ internal class SnapshotFileProgress(val system: SnapshotSystemJUnit5, val classN
           } else {
             SnapshotFile.createEmptyWithUnixNewlines(system.layout.unixNewlines)
           }
+      this.file = file
+      return file
     }
-    return file!!
   }
   fun incrementContainers() {
     assertNotTerminated()
